@@ -6,11 +6,14 @@ set -e
 
 pushd libfabric
 ./configure --prefix="$BK_LIBFAB/build" \
-	--enable-efa=no \
 	--with-cuda=$EBROOTCUDA \
+	--enable-efa=no \
 	--enable-psm2=yes \
-	--enable-verbs=yes
+	--enable-opx=no \
+	--enable-verbs=yes \
+	--enable-debug
 
+make clean
 make -j 8 
 make install
 
