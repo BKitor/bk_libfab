@@ -2,13 +2,13 @@
 
 set -e
 
-WDIR="$HOME/libfab_proj"
+WDIR="$HOME/bk_libfab"
 bin="$WDIR/src/bin/bk_libfab_coll"
 
 init_wdir="pushd $WDIR && source initenv.bash"
 
-BK_HOSTNAMES=("cedar1" "cedar5")
-# BK_HOSTNAMES=("cedar5" "cedar1")
+# BK_HOSTNAMES=("cedar1" "cedar5")
+BK_HOSTNAMES=("gra-login1" "gra-login2")
 BK_SERVER="${BK_HOSTNAMES[0]}"
 BK_N="${#BK_HOSTNAMES[@]}"
 
