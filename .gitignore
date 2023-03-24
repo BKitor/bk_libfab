@@ -1,4 +1,3 @@
-libfabric*
 build
 .vscode
 src/bin/*

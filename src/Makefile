@@ -5,7 +5,7 @@ CFLAGS=-I../build/include -I$(IDIR) -g -Wall
 ODIR=obj
 LDIR=../build/lib
 
-LIBS=-lfabric -L/cvmfs/soft.computecanada.ca/easybuild/software/2020/avx2/Core/libfabric/1.15.1 -L../build/lib
+LIBS=-lfabric -L$(LDIR) # -L/cvmfs/soft.computecanada.ca/easybuild/software/2020/avx2/Core/libfabric/1.15.1 -L../build/lib
 
 _DEPS=bk_libfab.h
 DEPS=$(patsubst %,$(IDIR)/%,$(_DEPS))
