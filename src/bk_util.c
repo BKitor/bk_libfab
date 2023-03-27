@@ -13,6 +13,9 @@ void bk_cleanup() {
 	fi_close(&bk_bmark.domain->fid);
 	fi_close(&bk_bmark.fabric->fid);
 
+	if (bk_bmark.sbuf) free(bk_bmark.sbuf);
+	if (bk_bmark.rbuf) free(bk_bmark.rbuf);
+
 	if (bk_bmark.srv_dat) {
 		for (int i = 0; i < bk_bmark.bk_opts.n - 1; i++) {
 			shutdown(bk_bmark.srv_dat->clients[i], SHUT_RD);
@@ -46,7 +49,7 @@ void bk_print_info() {
 	fflush(stdout);
 }
 
-void bk_init_bmark(bk_bmark_t* bm) {
+void bk_build_bmark(bk_bmark_t* bm) {
 	bk_opt_t* bk_opts = &bm->bk_opts;
 	bk_opts->verbosity = 0;
 	bk_opts->oob_port = "9228";
@@ -327,68 +330,52 @@ bk_status_t bk_oob_barrier() {
 	return BK_OK;
 }
 
-bk_status_t bk_wait_cq() {
-	struct fi_cq_tagged_entry e;
-	ssize_t ret;
-	do {
-		ret = fi_cq_read(bk_bmark.cq, &e, 1);
-		if (ret < 0 && ret != -FI_EAGAIN) {
-			BK_OUT_ERROR("Error reading from CQ (%s)", fi_strerror(ret));
-			return BK_ERR;
-		}
-	} while (ret != 1);
-
-	if (e.flags & FI_RECV) {
-		BK_OUT_DEBUG("fi_recv complete len:%ld, tag:%ld", e.len, e.tag);
-	}
-	else if (e.flags & FI_SEND) {
-		BK_OUT_DEBUG("send complete len:%ld, tag:%ld", e.len, e.tag);
-	}
-	else {
-		BK_OUT_DEBUG("I don't know what the fuck I just did, but it completed");
-	}
+bk_status_t bk_init_bmark() { // setup benchmark, initalize data and other requirements
+	size_t maxbufsize = bk_bmark.bk_opts.esize;
+	bk_bmark.rbuf = calloc(maxbufsize, sizeof(uint8_t));
+	bk_bmark.sbuf = calloc(maxbufsize, sizeof(uint8_t));
 
 	return BK_OK;
 }
 
-bk_status_t bk_init_fabric() {
-	int ret = 0;
-	struct fi_info* info, * hints = bk_bmark.hints;
-	struct fid_fabric* fabric;
-	struct fid_domain* domain;
-	struct fid_ep* ep;
-	struct fid_cq* cq;
-	struct fid_av* av;
+bk_status_t bk_init_comm() { // set up the 'communicator', exchenge addresses with peers
+	int ret = BK_OK;
+	struct fid_ep* ep = bk_bmark.ep;
+	struct fid_av* av = bk_bmark.av;
 	void* peernames = NULL, * myname = NULL;
 	size_t namelen = 0;
 
-	// fi_getinfo(FI_VERSION(1, 17), bk_opt->srv_addr, bk_opt->port, 0, hints, &info);
-	ret = fi_getinfo(FI_VERSION(1, 15), NULL, NULL, 0, hints, &info);
-	if (ret < 0) {
-		BK_OUT_ERROR("fi_getinfo error (%s)", fi_strerror(ret));
+	myname = malloc(namelen);
+	ret = fi_getname(&ep->fid, NULL, &namelen);
+	fi_getname(&ep->fid, myname, &namelen);
+
+	peernames = calloc(bk_bmark.bk_opts.n, namelen);
+	if (BK_OK != bk_oob_allgather(myname, peernames, namelen)) {
+		BK_OUT_ERROR("oob_allgather error");
 		return BK_ERR;
 	}
-	bk_bmark.info = info;
 
-	BK_OUT_INFO("Selected provider: %s (%s)", info->fabric_attr->prov_name, info->domain_attr->name);
-	BK_OUT_INFO("max_tx: %ld, max_rx: %ld", info->domain_attr->max_ep_tx_ctx, info->domain_attr->max_ep_rx_ctx);
-	BK_OUT_INFO("max_msg_size: %ld", info->ep_attr->max_msg_size);
-
-	ret = fi_fabric(info->fabric_attr, &fabric, NULL);
+	fi_addr_t* peeraddrs = calloc(bk_bmark.bk_opts.n, sizeof(*peeraddrs));
+	ret = fi_av_insert(av, peernames, bk_bmark.bk_opts.n, peeraddrs, 0, NULL);
 	if (ret < 0) {
-		BK_OUT_ERROR("fi_fabric error (%s)", fi_strerror(ret));
+		BK_OUT_ERROR("av_insert error (%s)", fi_strerror(ret));
 		return BK_ERR;
 	}
-	bk_bmark.fabric = fabric;
-	fflush(stdout);
+	bk_bmark.peeraddrs = peeraddrs;
 
-	ret = fi_domain(fabric, info, &domain, NULL);
-	if (ret < 0) {
-		BK_OUT_ERROR("fi_domain error (%s)", fi_strerror(ret));
-		return BK_ERR;
-	}
-	bk_bmark.domain = domain;
-	fflush(stdout);
+	if (peeraddrs)free(peeraddrs);
+	if (myname)free(myname);
+
+	return bk_init_bmark();
+}
+
+bk_status_t bk_init_endpoint() { // initialize endpoint, attach cq and av
+	int ret = BK_OK;
+	struct fid_domain* domain = bk_bmark.domain;
+	struct fi_info* info = bk_bmark.info;
+	struct fid_ep* ep;
+	struct fid_cq* cq;
+	struct fid_av* av;
 
 	fi_endpoint(domain, info, &ep, NULL);
 	if (ret < 0) {
@@ -437,26 +424,43 @@ bk_status_t bk_init_fabric() {
 		BK_OUT_ERROR("fi_enable error (%s)", fi_strerror(ret));
 		return BK_ERR;
 	}
+	return bk_init_comm();
+}
 
-	myname = malloc(namelen);
-	ret = fi_getname(&ep->fid, NULL, &namelen);
-	fi_getname(&ep->fid, myname, &namelen);
 
-	peernames = calloc(bk_bmark.bk_opts.n, namelen);
-	if (BK_OK != bk_oob_allgather(myname, peernames, namelen)) {
-		BK_OUT_ERROR("oob_allgather error");
-		return BK_ERR;
-	}
+bk_status_t bk_init_fabric() { // initialize fabric, call getinfo and establish fabric & domain
+	int ret = 0;
+	struct fi_info* info, * hints = bk_bmark.hints;
+	struct fid_fabric* fabric;
+	struct fid_domain* domain;
 
-	fi_addr_t* peeraddrs = calloc(bk_bmark.bk_opts.n, sizeof(*peeraddrs));
-	ret = fi_av_insert(av, peernames, bk_bmark.bk_opts.n, peeraddrs, 0, NULL);
+	// fi_getinfo(FI_VERSION(1, 17), bk_opt->srv_addr, bk_opt->port, 0, hints, &info);
+	ret = fi_getinfo(FI_VERSION(1, 15), NULL, NULL, 0, hints, &info);
 	if (ret < 0) {
-		BK_OUT_ERROR("av_insert error (%s)", fi_strerror(ret));
+		BK_OUT_ERROR("fi_getinfo error (%s)", fi_strerror(ret));
 		return BK_ERR;
 	}
-	bk_bmark.peeraddrs = peeraddrs;
+	bk_bmark.info = info;
 
-	if (peeraddrs)free(peeraddrs);
-	if (myname)free(myname);
-	return BK_OK;
+	BK_OUT_INFO("Selected provider: %s (%s)", info->fabric_attr->prov_name, info->domain_attr->name);
+	BK_OUT_INFO("max_tx: %ld, max_rx: %ld", info->domain_attr->max_ep_tx_ctx, info->domain_attr->max_ep_rx_ctx);
+	BK_OUT_INFO("max_msg_size: %ld", info->ep_attr->max_msg_size);
+
+	ret = fi_fabric(info->fabric_attr, &fabric, NULL);
+	if (ret < 0) {
+		BK_OUT_ERROR("fi_fabric error (%s)", fi_strerror(ret));
+		return BK_ERR;
+	}
+	bk_bmark.fabric = fabric;
+	fflush(stdout);
+
+	ret = fi_domain(fabric, info, &domain, NULL);
+	if (ret < 0) {
+		BK_OUT_ERROR("fi_domain error (%s)", fi_strerror(ret));
+		return BK_ERR;
+	}
+	bk_bmark.domain = domain;
+	fflush(stdout);
+
+	return bk_init_endpoint();
 }

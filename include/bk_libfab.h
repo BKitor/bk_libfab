@@ -52,6 +52,8 @@ typedef struct bk_bmark_t {
 	bk_server_t* srv_dat;
 	int srv_soc;
 	int rank;
+	void* sbuf;
+	void* rbuf;
 
 	struct fid_fabric* fabric;
 	struct fid_domain* domain;
@@ -64,7 +66,15 @@ typedef struct bk_bmark_t {
 
 extern bk_bmark_t bk_bmark;
 
-void bk_init_bmark(bk_bmark_t* bk_bmark);
+void bk_build_bmark(bk_bmark_t* bk_bmark);
+
+typedef struct bk_mb_iter_t {
+	struct timespec cstart;
+	struct timespec cend;
+	size_t	msize;
+}bk_mb_iter_t;
+
+typedef bk_status_t(bk_iter_fn_t)(bk_mb_iter_t*);
 
 bk_status_t bk_parse_args(int argc, char* argv[], bk_opt_t* bk_opts);
 
@@ -80,6 +90,29 @@ bk_status_t bk_oob_barrier();
 bk_status_t bk_init_fabric();
 void bk_cleanup();
 
-bk_status_t bk_wait_cq();
+static inline bk_status_t bk_wait_cq() {
+	struct fi_cq_tagged_entry e;
+	ssize_t ret;
+	do {
+		ret = fi_cq_read(bk_bmark.cq, &e, 1);
+		if (ret < 0 && ret != -FI_EAGAIN) {
+			BK_OUT_ERROR("Error reading from CQ (%s)", fi_strerror(ret));
+			return BK_ERR;
+		}
+	} while (ret != 1);
+
+	if (e.flags & FI_RECV) {
+		BK_OUT_DEBUG("fi_recv complete len:%ld, tag:%ld", e.len, e.tag);
+	}
+	else if (e.flags & FI_SEND) {
+		BK_OUT_DEBUG("send complete len:%ld, tag:%ld", e.len, e.tag);
+	}
+	else {
+		BK_OUT_DEBUG("I don't know what the fuck I just did, but it completed");
+	}
+
+	return BK_OK;
+}
+
 
 #endif /* BK_LIBFAB_H */
