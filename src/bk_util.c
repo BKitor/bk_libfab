@@ -32,7 +32,7 @@ void bk_cleanup() {
 	// fi_freeinfo(bk_bmark.hints);
 }
 
-void bk_print_info() {
+void bk_print_info(bk_bm_def_t* bm_lst) {
 	char hname[128];
 	gethostname(hname, 128);
 	BK_OUT_INFO("### bk_libfab_coll pid: %d nnodes: %d, svr: %s:%s, running on %s, msizes(%ld->%ld), iters: %d, warmups: %d",
@@ -47,13 +47,30 @@ void bk_print_info() {
 		bk_bmark.bk_opts.warmups
 	);
 	fflush(stdout);
+	char* bm_out_str = calloc(1 << 10, sizeof(char));
+	strcat(bm_out_str, "### Benchmarks: ");
+
+	bm_lst = bm_lst->next;
+	strcat(bm_out_str, bm_lst->name);
+
+	while (bm_lst->next) {
+		bm_lst = bm_lst->next;
+
+		strcat(bm_out_str, ", ");
+		strcat(bm_out_str, bm_lst->name);
+	}
+	BK_OUT_INFO("%s", bm_out_str)
+
+	fflush(stdout);
+	free(bm_out_str);
 }
 
-void bk_build_bmark(bk_bmark_t* bm) {
+void bk_bmark_construct(bk_bmark_t* bm) {
 	bk_opt_t* bk_opts = &bm->bk_opts;
 	bk_opts->verbosity = 0;
 	bk_opts->oob_port = "9228";
 	bk_opts->srv_addr = NULL;
+	bk_opts->bm_str = "barrier,tag_ring";
 	bk_opts->n = -1;
 	bk_opts->ssize = (1 >> 5);
 	bk_opts->esize = (1 >> 10);
@@ -86,16 +103,17 @@ int bk_parse_msizes(bk_opt_t* bk_opt, char* mstr) {
 }
 
 static struct option bk_arg_options[] = {
-	{"itterations", required_argument, NULL, 'i'},
-	{"msizes", required_argument, NULL, 'm'},
-	{"nnodes", required_argument, NULL, 'n'},
-	{"port", required_argument, NULL, 'p'},
-	{"server", required_argument, NULL, 's'},
-	{"verbosity", required_argument, NULL, 'v'},
-	{"warmups", required_argument, NULL, 'w'},
+	{"benchmaks", 	required_argument, NULL, 'b'},
+	{"itterations",	required_argument, NULL, 'i'},
+	{"msizes", 		required_argument, NULL, 'm'},
+	{"nnodes", 		required_argument, NULL, 'n'},
+	{"port", 		required_argument, NULL, 'p'},
+	{"server", 		required_argument, NULL, 's'},
+	{"verbosity", 	required_argument, NULL, 'v'},
+	{"warmups", 	required_argument, NULL, 'w'},
 };
 
-char* bk_opt_str = "i:m:n:p:s:v:w:";
+char* bk_opt_str = "b:i:m:n:p:s:v:w:";
 
 bk_status_t bk_parse_args(int argc, char* argv[], bk_opt_t* bk_opt) {
 	int ret = BK_OK;
@@ -103,6 +121,9 @@ bk_status_t bk_parse_args(int argc, char* argv[], bk_opt_t* bk_opt) {
 		int c = getopt_long(argc, argv, bk_opt_str, bk_arg_options, NULL);
 		if (-1 == c)break;
 		switch (c) {
+		case 'b':
+			bk_opt->bm_str = optarg;
+			break;
 		case 'i':
 			bk_opt->iters = atoi(optarg);
 			break;
@@ -133,6 +154,43 @@ bk_status_t bk_parse_args(int argc, char* argv[], bk_opt_t* bk_opt) {
 			break;
 		}
 	}
+
+	return BK_OK;
+}
+
+bk_status_t bk_parse_def_csl(bk_bm_def_t* def_lst) {
+	char* tok = NULL, * strtmp = NULL;
+	const char comma[2] = ",";
+
+	if (!bk_bmark.bk_opts.bm_str) {
+		BK_OUT_ERROR("benchmark comma-seperated-list can't be NULL");
+		return BK_ERR;
+	}
+
+	strtmp = alloca(strlen(bk_bmark.bk_opts.bm_str));
+	strcpy(strtmp, bk_bmark.bk_opts.bm_str);
+
+	tok = strtok(strtmp, comma);
+
+	while (NULL != tok) {
+		int m, m_flag = 0;
+		BK_OUT_DEBUG("strtok found token %s", tok);
+		for (int i = 0; i < bk_iter_def_arr_len; i++) {
+			m = strcmp(bk_iter_def_arr[i].name, tok);
+			if (0 == m) {
+				BK_OUT_DEBUG("matched %s/%s", tok, bk_iter_def_arr[i].name);
+				m_flag = 1;
+				def_lst->next = &bk_iter_def_arr[i];
+				def_lst = def_lst->next;
+			}
+		}
+		if (!m_flag) {
+			BK_OUT_ERROR("Could not find benchmark \"%s\"", tok);
+			return BK_ERR;
+		}
+		tok = strtok(NULL, comma);
+	}
+
 
 	return BK_OK;
 }
@@ -330,7 +388,11 @@ bk_status_t bk_oob_barrier() {
 	return BK_OK;
 }
 
-bk_status_t bk_init_bmark() { // setup benchmark, initalize data and other requirements
+bk_status_t bk_init_bmark_rma() { // setup benchmark, initalize data and other requirements
+	__builtin_unreachable();
+}
+
+bk_status_t bk_init_bmark_tag() { // setup benchmark, initalize data and other requirements
 	size_t maxbufsize = bk_bmark.bk_opts.esize;
 	bk_bmark.rbuf = calloc(maxbufsize, sizeof(uint8_t));
 	bk_bmark.sbuf = calloc(maxbufsize, sizeof(uint8_t));
@@ -366,7 +428,34 @@ bk_status_t bk_init_comm() { // set up the 'communicator', exchenge addresses wi
 	if (peeraddrs)free(peeraddrs);
 	if (myname)free(myname);
 
-	return bk_init_bmark();
+	return bk_init_bmark_tag();
+}
+
+bk_status_t bk_init_ep_cnnt() {
+	__builtin_unreachable();
+}
+
+bk_status_t bk_init_ep_cq() {
+	int ret = BK_OK;
+	struct fid_cq* cq;
+
+	struct fi_cq_attr cq_attr = { 0 };
+	cq_attr.size = 128;
+	cq_attr.format = FI_CQ_FORMAT_TAGGED;
+	ret = fi_cq_open(bk_bmark.domain, &cq_attr, &cq, NULL);
+	if (ret < 0) {
+		BK_OUT_ERROR("fi_endpoint error (%s)", fi_strerror(ret));
+		return BK_ERR;
+	}
+	bk_bmark.cq = cq;
+
+	ret = fi_ep_bind(bk_bmark.ep, &cq->fid, FI_RECV | FI_TRANSMIT);
+	if (ret < 0) {
+		BK_OUT_ERROR("fi_ep_bind cq error (%s)", fi_strerror(ret));
+		return BK_ERR;
+	}
+
+	return BK_OK;
 }
 
 bk_status_t bk_init_endpoint() { // initialize endpoint, attach cq and av
@@ -374,7 +463,6 @@ bk_status_t bk_init_endpoint() { // initialize endpoint, attach cq and av
 	struct fid_domain* domain = bk_bmark.domain;
 	struct fi_info* info = bk_bmark.info;
 	struct fid_ep* ep;
-	struct fid_cq* cq;
 	struct fid_av* av;
 
 	fi_endpoint(domain, info, &ep, NULL);
@@ -383,25 +471,8 @@ bk_status_t bk_init_endpoint() { // initialize endpoint, attach cq and av
 		return BK_ERR;
 	}
 	bk_bmark.ep = ep;
-	fflush(stdout);
 
-	struct fi_cq_attr cq_attr = { 0 };
-	cq_attr.size = 128;
-	cq_attr.format = FI_CQ_FORMAT_TAGGED;
-	ret = fi_cq_open(domain, &cq_attr, &cq, NULL);
-	if (ret < 0) {
-		BK_OUT_ERROR("fi_endpoint error (%s)", fi_strerror(ret));
-		return BK_ERR;
-	}
-	bk_bmark.cq = cq;
-	fflush(stdout);
-
-	ret = fi_ep_bind(ep, &cq->fid, FI_RECV | FI_TRANSMIT);
-	if (ret < 0) {
-		BK_OUT_ERROR("fi_ep_bind cq error (%s)", fi_strerror(ret));
-		return BK_ERR;
-	}
-	fflush(stdout);
+	if ((ret = bk_init_ep_cq())) { return ret; }
 
 	struct fi_av_attr av_attr = { 0 };
 	av_attr.type = FI_AV_TABLE;

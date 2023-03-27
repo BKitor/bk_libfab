@@ -31,14 +31,15 @@ typedef enum {
 } bk_verbosity_t;
 
 typedef struct bk_opt_t {
-	int n;
-	char* oob_port;
-	char* srv_addr;
-	int verbosity;
 	size_t ssize;
 	size_t esize;
+	int n;
+	int verbosity;
 	int32_t iters;
 	int32_t warmups;
+	char* oob_port;
+	char* srv_addr;
+	char* bm_str;
 }bk_opt_t;
 
 typedef struct bk_server_t {
@@ -66,7 +67,7 @@ typedef struct bk_bmark_t {
 
 extern bk_bmark_t bk_bmark;
 
-void bk_build_bmark(bk_bmark_t* bk_bmark);
+void bk_bmark_construct(bk_bmark_t* bk_bmark);
 
 typedef struct bk_mb_iter_t {
 	struct timespec cstart;
@@ -76,9 +77,25 @@ typedef struct bk_mb_iter_t {
 
 typedef bk_status_t(bk_iter_fn_t)(bk_mb_iter_t*);
 
-bk_status_t bk_parse_args(int argc, char* argv[], bk_opt_t* bk_opts);
+bk_iter_fn_t bk_barrier_iter_fn;
+bk_iter_fn_t bk_oob_barrier_iter_fn;
+bk_iter_fn_t bk_tag_ring_iter_fn;
+bk_iter_fn_t bk_rma_ring_iter_fn;
 
-void bk_print_info();
+typedef struct bk_bm_def_t {
+	char* name;
+	bk_iter_fn_t* fn;
+	struct bk_bm_def_t *next;
+} bk_bm_def_t;
+
+extern size_t bk_iter_def_arr_len;
+extern bk_bm_def_t bk_iter_def_arr[];
+
+bk_status_t bk_parse_def_csl(bk_bm_def_t* def_lst);
+
+bk_status_t bk_parse_args(int argc, char* argv[], bk_opt_t * bk_opts);
+
+void bk_print_info(bk_bm_def_t* bm_list);
 
 bk_status_t bk_oob_server_setup(int bind_sock);
 bk_status_t bk_oob_init();

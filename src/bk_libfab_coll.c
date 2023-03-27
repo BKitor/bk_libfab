@@ -3,6 +3,13 @@
 
 struct fi_context sctx = { 0 }, rctx = { 0 };
 
+bk_bm_def_t bk_iter_def_arr[] = {
+	{"barrier", 	bk_barrier_iter_fn,		NULL},
+	{"oob_barrier", bk_oob_barrier_iter_fn,	NULL},
+	{"tag_ring", 	bk_tag_ring_iter_fn, 	NULL},
+	{"rma_ring", 	bk_rma_ring_iter_fn,	NULL},
+};
+size_t bk_iter_def_arr_len = 4;
 
 static inline bk_status_t bk_barrier() {
 	int ret = BK_OK;
@@ -72,17 +79,18 @@ bk_status_t bk_tag_ring_iter_fn(bk_mb_iter_t* i) {
 	return BK_OK;
 }
 
-// bk_status_t bk_rma_ring_exch() {
-// 	fid_ep = bk_bmark.ep;
+bk_status_t bk_rma_ring_iter_fn(bk_mb_iter_t* i) {
+	__builtin_unreachable();
+	// 	fid_ep = bk_bmark.ep;
 
-// 	fi_addr_t speer = (r + n + 1) % n;
-// 	fi_addr_t rpeer = (r + n - 1) % n;
+	// 	fi_addr_t speer = (r + n + 1) % n;
+	// 	fi_addr_t rpeer = (r + n - 1) % n;
 
-// 	fi_read(ep, );
-// 	fi_write(ep, );
+	// 	fi_read(ep, );
+	// 	fi_write(ep, );
 
-// 	return BK_OK;
-// }
+	// 	return BK_OK;
+}
 
 
 bk_status_t bk_bmark_harness(bk_iter_fn_t iter_fn) {
@@ -114,15 +122,23 @@ bk_status_t bk_bmark_harness(bk_iter_fn_t iter_fn) {
 
 int main(int argc, char* argv[]) {
 	bk_status_t ret = BK_OK;
+	bk_bm_def_t bm_lst_head = { 0 };
 
-	bk_build_bmark(&bk_bmark);
+	bk_bmark_construct(&bk_bmark);
 
 	ret = bk_parse_args(argc, argv, &bk_bmark.bk_opts);
 	if (BK_OK != ret) {
 		return ret;
 	}
 
-	bk_print_info();
+	if ((ret = bk_parse_def_csl(&bm_lst_head))) { return ret; }
+
+	if (!bm_lst_head.next) {
+		BK_OUT_ERROR("No benchmarks specified");
+		return BK_ERR;
+	}
+
+	bk_print_info(&bm_lst_head);
 
 	ret = bk_oob_init();
 	if (BK_OK != ret) {
@@ -145,20 +161,13 @@ int main(int argc, char* argv[]) {
 	ret = bk_init_fabric();
 	if (BK_OK != ret) { return BK_ERR; };
 
-	if (0 == bk_bmark.rank)BK_OUT_INFO("BK BARRIER");
-	ret = bk_bmark_harness(bk_barrier_iter_fn);
-	if (BK_OK != ret) { return BK_ERR; };
-
-	if (0 == bk_bmark.rank)BK_OUT_INFO("BK OOB BARRIER");
-	ret = bk_bmark_harness(bk_oob_barrier_iter_fn);
-	if (BK_OK != ret) { return BK_ERR; };
-
-	if (0 == bk_bmark.rank)BK_OUT_INFO("TAG RING");
-	ret = bk_bmark_harness(bk_tag_ring_iter_fn);
-	if (BK_OK != ret) { return BK_ERR; };
-
-	// ret = bk_rma_ring_exch();
-	// if (BK_OK != ret) { return BK_ERR; };
+	bk_bm_def_t* bm_lst = &bm_lst_head;
+	while (bm_lst->next) {
+		bm_lst = bm_lst->next;
+		if (0 == bk_bmark.rank)BK_OUT_INFO("BMARK: %s", bm_lst->name);
+		ret = bk_bmark_harness(bm_lst->fn);
+		if (BK_OK != ret) { return BK_ERR; };
+	}
 
 	bk_oob_barrier();
 	bk_cleanup();
